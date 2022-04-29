@@ -1,4 +1,4 @@
-# An Replication of the Proof of Work Algorithm
+# A Replication of the Proof of Work Algorithm
 
 In the course of my research on how to apply the proof of work algorithm to a blockchain, I have created a simple replication of the proof of work algorithm.
 
