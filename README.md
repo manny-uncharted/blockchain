@@ -14,3 +14,6 @@ And it contains the following information:
 - Hash Value: The hash of the block which is basically it's id
 - Timestamo: The time the block was created
 - Nonce(Proof-of-work): The number of times the block has been mined
+
+## What is a blockchain?
+A blockchain is a collection of blocks. It is a chain of blocks that are linked together.
