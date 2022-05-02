@@ -11,6 +11,7 @@ import sys
 import asyncio
 import aiohttp
 from aiohttp import web
+
 import hashlib
 
 VIEW_SET_INTERVAL = 10
@@ -145,186 +146,208 @@ class Status:
             return False
 
 class CheckPoint:
-    """
-    Records all the status of the checkpoint for the given PBFTHandler
-    """
-    RECEIVE_CKPT_VOTE = 'receive_ckpt_vote' # receives checkpoint vote
-    def __init__(self, checkpoint_interval, nodes, f, node_index, lose_rate = 0, network_timeout = 10):
+    '''
+    Record all the status of the checkpoint for given PBFTHandler.
+    '''
+    RECEIVE_CKPT_VOTE = 'receive_ckpt_vote'
+    def __init__(self, checkpoint_interval, nodes, f, node_index, 
+            lose_rate = 0, network_timeout = 10):
         self._checkpoint_interval = checkpoint_interval
         self._nodes = nodes
         self._f = f
         self._node_index = node_index
         self._loss_rate = lose_rate
-        self._log = logging.getLogger(__name__)
-        """Defining the next slot of the given globally accepted checkpoint."""
+        self._log = logging.getLogger(__name__) 
+        # Next slot of the given globally accepted checkpoint.
+        # For example, the current checkpoint record until slot 99
+        # next_slot = 100
         self.next_slot = 0
         # Globally accepted checkpoint
         self.checkpoint = []
-        
-        """Using the hash of the checkpoint to record votes for the given checkpoint"""
-        self._received_votes_by_ckpt = {}
+        # Use the hash of the checkpoint to record receive vates for given ckpt.
+        self._received_votes_by_ckpt = {} 
         self._session = None
         self._network_timeout = network_timeout
 
-        self._log.info("---> %d: Create Checkpoint.", self._node_index)
+        self._log.info("---> %d: Create checkpoint.", self._node_index)
 
-    # class to record the status of received checkpoints
+    # Class to record the status of received checkpoints
     class ReceiveVotes:
         def __init__(self, ckpt, next_slot):
             self.from_nodes = set([])
             self.checkpoint = ckpt
             self.next_slot = next_slot
 
-        def get_commit_upperbound(self):
-            """This is to return the upperbound that could commit (return upperbound = true upperbound +1)"""
-            return self.next_slot + 2 * self._checkpoint_interval
+    def get_commit_upperbound(self):
+        '''
+        Return the upperbound that could commit 
+        (return upperbound = true upperbound + 1)
+        '''
+        return self.next_slot + 2 * self._checkpoint_interval
 
-        def _hash_ckpt(self, ckpt):
-            """
-            Accepted Arguments:
-                ckpt: the checkpoint to be hashed
-            output:
-                hash_object: the hash of the checkpoint in the format of a binary string
-            """
-            hash_object = hashlib.md5(json.dumps(ckpt, sort_keys=true).encode('utf-8'))
-            return hash_object.digest()
-
-        async def receive_vote(self, ckpt_vote):
-            """
-            Trigger when pBFTHandler receives checkpoint votes.
-            First, we update the checkpoint status. Second, update the checkpoint if more than 2f + 1 nodes agree with the given checkpoint
-            Input:
-                ckpt_vote = {
-                    'node_index': self._node_index
-                    'next_slot': self._next_slot + self._checkpoint_interval
-                    'ckpt': json.dumps(ckpt)
-                    'type': 'vote'
-                }
-            """
-            self._log.debug("---> %d: Received Checkpoint votes", self._node_index)
-            ckpt = json.loads(ckpt_vote['ckpt'])
-            next_slot = ckpt_vote['next_slot']
-            from_node = ckpt_vote['node_index']
+    def _hash_ckpt(self, ckpt):
+        '''
+        input: 
+            ckpt: the checkpoint
+        output:
+            The hash of the input checkpoint in the format of 
+            binary string.
+        '''
+        hash_object = hashlib.md5(json.dumps(ckpt, sort_keys=True).encode())
+        return hash_object.digest()  
 
 
-            hash_ckpt = self._hash_ckpt(ckpt)
-            if hash_ckpt not in self._received_votes_by_ckpt:
-                self._received_votes_by_ckpt[hash_ckpt] = (
-                    CheckPoint.ReceiveVotes(ckpt, next_slot)
-                )
-            status = self._received_votes_by_ckpt[hash_ckpt]
-            status.from_nodes.add(from_node)
-            for hash_ckpt in self._received_votes_by_ckpt:
-                if (self._received_votes_by_ckpt[hash_ckpt].next_slot > self.next_slot and len(self.received_votes_by_ckpt[hash_ckpt].from_nodes) >= 2* self._f +1):
-                    self._log,info("---> %d: Update Checkpoint by receiving votes", self._node_index)
-                    self.next_slot = self._received_votes_by_ckpt[hash_ckpt].next_slot
-                    self.checkpoint = self._received_votes_by_ckpt[hash_ckpt].checkpoint
-
-        async def propose_vote(self, commit_decisions):
-            """When the node slot of committed messages exceed self._next_slot + self._checkpoint_interval, propose new checkpoint to broadcast every node
-            Accepted Argument:
-                commit_decision: list of tuple[((client_index, client_sequence), data), ....]
-            Output: 
-                next_slot for the new update and garbage collection of the Status object.
-            """
-            proposed_checkpoint = self.checkpoint + commit_decisions
-            await self._broadcast_checkpoint(proposed_checkpoint,
-                'vote', CheckPoint.RECEIVE_CKPT_VOTE)
-
-        async def _post(self, nodes, command, json_data):
-            """
-            Broadcats json_data to all nodes in network with given command.
-            Accepted Argument: 
-                nodes: list of nodes
-                command: action
-                json_data: data in json format.
-            """
-            if not self._session:
-                timeout = aiohttp.ClientTimeout(self._network_timeout)
-                self.session = aiohttp.ClientSession(timeout=timeout)
-            for i, node in enumerate(nodes):
-                if random() > self._loss_rate:
-                    self._log.debug("make request to %d, %s", i, command)
-                    try:
-                        await self._seesion.post(
-                            self.make_url(node, command), json=json_data
-                        )
-                    except Exception as e:
-                        self._log.error(e)
-                        pass
-        
-        @staticmethod
-        def make_url(node, command):
-            """
-            Accepted Argument:
-                node: dictionary with key of host(url) and port number
-                command: action
-            Output: 
-                The url to send with the given node and action.
-            """
-            return "http://{}:{}/{}".format(node['host'], node['port'], command)
-
-        async def _broadcast_checkpoint(self, ckpt, msg_type, command):
-            json_data = {
-                'node_index': self._node_index,
-                'next_slot': self.next_slot + self._checkpoint_interval,
-                'ckpt': json.dumps(ckpt),
-                'type': msg_type
+    async def receive_vote(self, ckpt_vote):
+        '''
+        Trigger when PBFTHandler receive checkpoint votes.
+        First, we update the checkpoint status. Second, 
+        update the checkpoint if more than 2f + 1 node 
+        agree with the given checkpoint.
+        input: 
+            ckpt_vote = {
+                'node_index': self._node_index
+                'next_slot': self._next_slot + self._checkpoint_interval
+                'ckpt': json.dumps(ckpt)
+                'type': 'vote'
             }
-            await self._post(self._nodes, command, json_data)
+        '''
+        self._log.debug("---> %d: Receive checkpoint votes", self._node_index)
+        ckpt = json.loads(ckpt_vote['ckpt'])
+        next_slot = ckpt_vote['next_slot']
+        from_node = ckpt_vote['node_index']
 
-        def get_ckpt_info(self):
-            """
-            Get the checkpoint serialized information called by synchronize function to get the checkpoint information.
-            """
+        hash_ckpt = self._hash_ckpt(ckpt)
+        if hash_ckpt not in self._received_votes_by_ckpt:
+            self._received_votes_by_ckpt[hash_ckpt] = (
+                CheckPoint.ReceiveVotes(ckpt, next_slot))
+        status = self._received_votes_by_ckpt[hash_ckpt]
+        status.from_nodes.add(from_node)
+        for hash_ckpt in self._received_votes_by_ckpt:
+            if (self._received_votes_by_ckpt[hash_ckpt].next_slot > self.next_slot and 
+                    len(self._received_votes_by_ckpt[hash_ckpt].from_nodes) >= 2 * self._f + 1):
+                self._log.info("---> %d: Update checkpoint by receiving votes", self._node_index)
+                self.next_slot = self._received_votes_by_ckpt[hash_ckpt].next_slot
+                self.checkpoint = self._received_votes_by_ckpt[hash_ckpt].checkpoint
+
+
+    async def propose_vote(self, commit_decisions):
+        '''
+        When node the slots of committed message exceed self._next_slot 
+        plus self._checkpoint_interval, propose new checkpoint and 
+        broadcast to every node
+        input: 
+            commit_decisions: list of tuple: [((client_index, client_seq), data), ... ]
+        output:
+            next_slot for the new update and garbage collection of the Status object.
+        '''
+        proposed_checkpoint = self.checkpoint + commit_decisions
+        await self._broadcast_checkpoint(proposed_checkpoint, 
+            'vote', CheckPoint.RECEIVE_CKPT_VOTE)
+
+
+    async def _post(self, nodes, command, json_data):
+        '''
+        Broadcast json_data to all node in nodes with given command.
+        input:
+            nodes: list of nodes
+            command: action
+            json_data: Data in json format.
+        '''
+        if not self._session:
+            timeout = aiohttp.ClientTimeout(self._network_timeout)
+            self._session = aiohttp.ClientSession(timeout=timeout)
+        for i, node in enumerate(nodes):
+            if random() > self._loss_rate:
+                self._log.debug("make request to %d, %s", i, command)
+                try:
+                    _ = await self._session.post(
+                        self.make_url(node, command), json=json_data)
+                except Exception as e:
+                    #resp_list.append((i, e))
+                    self._log.error(e)
+                    pass
+
+    @staticmethod
+    def make_url(node, command):
+        '''
+        input: 
+            node: dictionary with key of host(url) and port
+            command: action
+        output:
+            The url to send with given node and action.
+        '''
+        return "http://{}:{}/{}".format(node['host'], node['port'], command)
+
+
+    async def _broadcast_checkpoint(self, ckpt, msg_type, command):
+        json_data = {
+            'node_index': self._node_index,
+            'next_slot': self.next_slot + self._checkpoint_interval,
+            'ckpt': json.dumps(ckpt),
+            'type': msg_type
+        }
+        await self._post(self._nodes, command, json_data)
+
+    def get_ckpt_info(self):
+
+        '''
+        Get the checkpoint serialized information.Called 
+        by synchronize function to get the checkpoint
+        information.
+        '''
+        json_data = {
+            'next_slot': self.next_slot,
+            'ckpt': json.dumps(self.checkpoint)
+        }
+        return json_data
+
+    def update_checkpoint(self, json_data):
+        '''
+        Update the checkpoint when input checkpoint cover 
+        more slots than current.
+        input: 
             json_data = {
-                'next_slot': self.next_slot,
-                'ckpt': json_dumps(self.checkpoint)
+                'next_slot': self._next_slot
+                'ckpt': json.dumps(ckpt)
+            }     
+        '''
+        self._log.debug("update_checkpoint: next_slot: %d; update_slot: %d"
+            , self.next_slot, json_data['next_slot'])
+        if json_data['next_slot'] > self.next_slot:
+            self._log.info("---> %d: Update checkpoint by synchronization.", self._node_index)
+            self.next_slot = json_data['next_slot']
+            self.checkpoint = json.loads(json_data['ckpt'])
+        
+
+    async def receive_sync(sync_ckpt):
+        '''
+        Trigger when recieve checkpoint synchronization messages.
+        input: 
+            sync_ckpt = {
+                'node_index': self._node_index
+                'next_slot': self._next_slot + self._checkpoint_interval
+                'ckpt': json.dumps(ckpt)
+                'type': 'sync'
             }
-            return json_data
+        '''
+        self._log.debug("receive_sync in checkpoint: current next_slot:"
+            " %d; update to: %d" , self.next_slot, json_data['next_slot'])
 
-        
-        def update_checkpoint(self, json_data):
-            """updates the checkpoint when input checkpoint cover more slots than the currently available slots
-            Accepts Arguments:
-                json_data = {
-                    'next_slot': self._next_slot,
-                    'ckpt': json.dumps(ckpt)
-                }
-            """
-            self._log.deug("update_checkpoint: next_slot: %d; update_slot: %d", self.next_slot, json_data['next_slot'])
-            if json_data['next_slot'] > self.next_slot:
-                self._log.info("---> %d: Update checkpoint by synchronization.", self._node_index)
-                self.next_slot = json_data['next_slot']
-                self.checkpoint = json.loads(json_data['ckpt'])
-        
+        if sync_ckpt['next_slot'] > self._next_slot:
+            self.next_slot = sync_ckpt['next_slot']
+            self.checkpoint = json.loads(sync_ckpt['ckpt'])
 
-        async def receive_sync(sync_ckpt):
-            """Triggers when it receives checkpoint synchronization maessages
-            input: 
-                sync_ckpt = {
-                    'node_index': self._node_index
-                    'next_slot': self._next_slot + self._checkpoint_interval
-                    'ckpt': json.dumps(ckpt)
-                    'type': 'sync'
-                }
-            """
-            self._log.debug("receive_sync in checkpoint: current next_slot:" "%d; update to: %d", self.next_slot, json_data['next_slot'])
-
-            if sync_ckpt['next_slot'] > self._next_slot:
-                self.next_slot = sync_ckpt['next_slot']
-                self.checkpoint = json.loads(sync_ckpt['ckpt'])
-
-        
-        async def garbage_collection(self):
-            """Cleans those ReceieveCKPT objects whose next_slot is smaller than or equal to the current."""
-
-            deletes = []
-            for hash_ckpt in self._received_votes_by_ckpt:
-                if self._received_votes_by_ckpt[hash_ckpt].next-slot <= next_slot:
-                    deletes.append(hash_ckpt)
-            for hash_ckpt in deletes:
-                del self._received_votes_by_ckpt['hash_ckpt']
+    async def garbage_collection(self):
+        '''
+        Clean those ReceiveCKPT objects whose next_slot smaller
+        than or equal to the current.
+        '''
+        deletes = []
+        for hash_ckpt in self._received_votes_by_ckpt:
+            if self._received_votes_by_ckpt[hash_ckpt].next_slot <= next_slot:
+                deletes.append(hash_ckpt)
+        for hash_ckpt in deletes:
+            del self._received_votes_by_ckpt[hash_ckpt]
 
 class ViewChangeVotes:
     """
@@ -412,7 +435,7 @@ class PBFTHandler:
         # Checkpoint
         # After finishing committing self._checkpoint, the next_slot will be updated to the next_slot of the checkpoint
         self._checkpoint_interval = conf['ckpt_interval']
-        self._ckpt = Checkpoint(self._checkpoint_interval, self._nodes, self._f, self._index, self._loss_rate, self._network_timeout)
+        self._ckpt = CheckPoint(self._checkpoint_interval, self._nodes, self._f, self._index, self._loss_rate, self._network_timeout)
 
         # Commit
         self._last_commit_slot = -1
@@ -564,9 +587,9 @@ class PBFTHandler:
         else:
             json_data = await request.json()
             await self.preprepare(json_data)
-            return web.Response(text='OK')
+            return web.Response()
 
-    async def propose(self, request):
+    async def prepare(self, request):
         """
         Once we recieve pre-prepare message from client, broadcasts the prepare message to all replicas
         input:
@@ -584,7 +607,7 @@ class PBFTHandler:
 
         if json_data['view'] < self._follow_view.get_view():
             # when the receive message with view < follow_view, do nothing
-            return web.Response(text='OK')
+            return web.Response()
         
         self._log.info("---> %d: receive preprepare msg from %d", self._index, json_data['leader'])
 
@@ -604,7 +627,7 @@ class PBFTHandler:
                 'type': Status.PREPARE
             }
             await self._post(self._nodes, PBFTHandler.COMMIT, prepare_msg)
-        return web.Response(text='OK')
+        return web.Response()
 
     async def commit(self, request):
         """
@@ -625,7 +648,7 @@ class PBFTHandler:
 
         if json_data['view'] < self._follow_view.get_view():
             # when the receive message with view < follow_view, do nothing
-            return web.Response(text='OK')
+            return web.Response()
 
         self._log.info("---> %d: on commit", self._index)
 
@@ -651,7 +674,7 @@ class PBFTHandler:
                     'type': Status.COMMIT
                 }
                 await self._post(self._nodes, PBFTHandler.COMMIT, commit_msg)
-        return web.Response(text='OK')
+        return web.Response()
     
     async def reply(self, request):
         """
@@ -673,7 +696,7 @@ class PBFTHandler:
 
         if json_data['view'] < self._follow_view.get_view():
             # when receive message with view < follow_view, do nothing
-            return web.Response(text='OK')
+            return web.Response()
         
         self._log.info("---> %d: receive commit msg from %d", self._index, json_data['index'])
 
@@ -701,7 +724,7 @@ class PBFTHandler:
                         'index': self._index,
                         'view': json_data['view'],
                         'proposal': json_data['proposal'][slot],
-                        'type'; Status.REPLY
+                        'type': Status.REPLY
                     }
                     status.is_committed = True
                     self._last_commit_slot += 1
@@ -720,7 +743,7 @@ class PBFTHandler:
                         pass
                     else:
                         self._log.info("%d reply to %s successfully!!", self._index, json_data['proposal'][slot]['client_url'])
-        return web.Response(text="OK")
+        return web.Response()
 
     def get_commit_decisions(self):
         """
@@ -745,24 +768,334 @@ class PBFTHandler:
             json.dump(dump_data, f)
 
     async def receive_ckpt_vote(self, request):
-        """
-        Receive the message sent from Checkpoint.propose_vote().
-        """
+        '''
+        Receive the message sent from CheckPoint.propose_vote()
+        '''
         self._log.info("---> %d: receive checkpoint vote.", self._index)
         json_data = await request.json()
         await self._ckpt.receive_vote(json_data)
-        return web.Response(text="Ok")
+        return web.Response()
 
     async def receive_sync(self, request):
-        """
+        '''
         Update the checkpoint and fill the bubble when receive sync messages.
         input:
             request: {
                 'checkpoint': json_data = {
-                    'next_slot': self._next_slot,
+                    'next_slot': self._next_slot
                     'ckpt': json.dumps(ckpt)
-                },
+                }
+                'commit_certificates':commit_certificates
+                    (Elements are commit_certificate.to_dict())
             }
+        '''
+        self._log.info("---> %d: on receive sync stage.", self._index)
+        json_data = await request.json()
+        self._ckpt.update_checkpoint(json_data['checkpoint'])
+        self._last_commit_slot = max(self._last_commit_slot, self._ckpt.next_slot - 1)
+        # TODO: Only check bubble instead of all slots between lowerbound
+        # and upperbound of the commit.
+
+        for slot in json_data['commit_certificates']:
+            # Skip those slot not qualified for update.
+            if int(slot) >= self._ckpt.get_commit_upperbound() or (
+                    int(slot) < self._ckpt.next_slot):
+                continue
+
+            certificate = json_data['commit_certificates'][slot]
+            if slot not in self._status_by_slot:
+                self._status_by_slot[slot] = Status(self._f)
+                commit_certificate = Status.Certificate(View(0, self._node_cnt))
+                commit_certificate.dumps_from_dict(certificate)
+                self._status_by_slot[slot].commit_certificate =  commit_certificate
+            elif not self._status_by_slot[slot].commit_certificate:
+                commit_certificate = Status.Certificate(View(0, self._node_cnt))
+                commit_certificate.dumps_from_dict(certificate)
+                self._status_by_slot[slot].commit_certificate =  commit_certificate
+
+        # Commit once the next slot of the last_commit_slot get commit certificate
+        while (str(self._last_commit_slot + 1) in self._status_by_slot and 
+                self._status_by_slot[str(self._last_commit_slot + 1)].commit_certificate):
+            self._last_commit_slot += 1
+
+            # When commit messages fill the next checkpoint, 
+            # propose a new checkpoint.
+            if (self._last_commit_slot + 1) % self._checkpoint_interval == 0:
+                await self._ckpt.propose_vote(self.get_commit_decisions())
+
+                self._log.info("---> %d: During rev_sync, Propose checkpoint with l "
+                    "ast slot: %d. In addition, current checkpoint's next_slot is: %d", 
+                    self._index, self._last_commit_slot, self._ckpt.next_slot)
+
+        await self._commit_action()
+
+        return web.Response()
+        
+
+    async def synchronize(self):
+        '''
+        Broadcast current checkpoint and all the commit certificate 
+        between next slot of the checkpoint and commit upperbound.
+        output:
+            json_data = {
+                'checkpoint': json_data = {
+                    'next_slot': self._next_slot
+                    'ckpt': json.dumps(ckpt)
+                }
+                'commit_certificates':commit_certificates
+                    (Elements are commit_certificate.to_dict())
+            }
+        '''
+        # TODO: Only send bubble slot message instead of all.
+        while 1:
+            await asyncio.sleep(self._sync_interval)
+            commit_certificates = {}
+            for i in range(self._ckpt.next_slot, self._ckpt.get_commit_upperbound()):
+                slot = str(i)
+                if (slot in self._status_by_slot) and (
+                        self._status_by_slot[slot].commit_certificate):
+                    status = self._status_by_slot[slot]
+                    commit_certificates[slot] = status.commit_certificate.to_dict()
+            json_data = {
+                'checkpoint': self._ckpt.get_ckpt_info(),
+                'commit_certificates':commit_certificates
+            }
+            await self._post(self._nodes, PBFTHandler.RECEIVE_SYNC, json_data)
+    async def get_prepare_certificates(self):
+        """
+        For a view change, get all prepare certificates in the valid commit interval.
+        output:
+            prepare_certificate_by_slot: dictionary which contains the mapping between each slot and its prepare_certificate if exists.
+        """
+        prepare_certificate_by_slot = {}
+        for i in range(self._ckpt.next_slot, self._ckpt.get_commit_upperbound()):
+            slot = str(i)
+            if slot in self._status_by_slot:
+                status = self._status_by_slot[slot]
+                if status.prepare_certificate:
+                    prepare_certificate_by_slot[slot] = (status.prepare_certificate.to_dict())
+        return prepare_certificate_by_slot
+
+    async def _post_view_change_vote(self):
+        """
+        Broadcasts the view change vote messages to all the nodes.
+        View change vote messages containing current node index, proposed new view number, checkpoint info, and all the prepare certificate between valid slots.
+        """
+        view_change_vote = {
+            "node_index": self._index,
+            "view_number": self._follow_view.get_view(),
+            "checkpoint": self._ckpt.get_ckpt_info(),
+            "prepare_certificates": await self.get_prepare_certificates(),
+        }
+        await self._post(self._nodes, PBFTHandler.VIEW_CHANGE_VOTE, view_change_vote)
+
+    async def get_view_change_request(self, request):
+        """
+        Gets view change request from client. Broadcasts the view change vote and all the information needed for view change(checkpoint, prepared_certificate) to every replicas.
+        input: 
+            request: view change request messages from client.
+                json_data{
+                    'action': 'view change'
+                }
         """
 
+        self._log.info("---> %d: receive the view change request from the client.", self._index)
+        json_data = await request.json()
 
+        # Checks to ensure the message is valid.
+        if json_data['action'] != "view change":
+            return web.Response()
+        """Updating the view number by 1 and changing the followed leader. In addition, if we receive view update message within update interval, do nothing."""
+        if not self._follow_view.set_view(self._follow_view.get_view() + 1):
+            return web.Response()
+
+        self._leader = self._follow_view.get_leader()
+        if self._is_leader:
+            self._log.info("%d Not leader anymore. View number:  %d", self._index, self._follow_view.get_view())
+            self._is_leader = False
+        self._log.debug("%d: vote for view change to %d.", self._index, self._follow_view.get_view())
+
+        await self._post_view_change_vote()
+
+        return web.Response()
+
+
+    async def receive_view_change_vote(self, request):
+        """
+        Receives the vote message for view change, then.
+        1. Update the checkpoint, if receive messages has larger checkpoint.
+        2. Update votes message (Node comes from and prepare-certificate).
+        3. View change if receive f + 1 votes
+        4. If we receive more than 2f + 1 node and is leader of the current view, change the leader, then become leader and preprepare the valid slot.
+        input:
+            request. After transforming it to Json:
+                json_data = {
+                    "node_index": self._index,
+                    "view_number": self._follow_view.get_view(),
+                    "checkpoint":self._ckpt.get_ckpt_info(),
+                    "prepared_certificates":self.get_prepare_certificates(),
+                }
+        """
+        self._log.info("%d receive view change vote.", self._index)
+        json_data = await request.json()
+        view_number = json_data['view_number']
+        if view-number not in self._view_change_votes_by_view_number:
+            self._view_change_votes_by_view_number[view_number] = (ViewChangeVotes(self._index, self._node_cnt))
+
+        self._ckpt.update_checkpoint(json_data['checkpoint'])
+        self._last_commit_slot = max(self._last_commit_slot, self._ckpt.next_slot - 1)
+        votes = self._view_change_votes_by_view_number[view_number]
+        votes.receive_vote(json_data)
+
+        """If Receive more than 2f + 1 votes, change the leader for current view, then become leader and propsose preprepare all slots."""
+        if len(votes.from_nodes) >= 2 * self._f + 1:
+
+            if self._follow_view.get_leader() == self._index and not self._is_leader:
+                self._log.ino("%d: Change to be leader!! view_number: %d", self._index, self._follow_view.get_view())
+                self._is_leader = True
+                self._view.set_view(self._follow_view.get_view())
+
+                # TODO: A More efficient way to find the last slot with prepare certificate.
+                last_certificate_slot = max([int(slot) for slot in votes.prepare_certificate_by_slot] + [-1])
+
+                # Updating the next_slot
+                self._next_propose_slot = last_certificate_slot + 1
+
+                proposal_by_slot = {}
+                for i in range(self._ckpt.next_slot, last_certificate_slot + 1):
+                    slot = str(i)
+                    if slot not in votes.prepare_certificate_by_slot:
+
+                        self._log.debug("%d decide no_op for slot %d", self._index, int(slot))
+
+                        proposal = {
+                            'id': (-1, -1),
+                            'client_url': "no_op",
+                            'timestamp': "no_op",
+                            'data': PBFTHandler.NO_OP
+                        }
+                        proposal_by_slot[slot] = proposal
+                    elif not self._status_by_slot[slot].commit_certificate:
+                        proposal = votes.prepare_certificate_by_slot[slot].get_proposal()
+                        proposal_by_slot = proposal
+
+                await self.fill_bubbles(proposal_by_slot)
+        return web.Response()
+    
+    async def fill_bubbles(self, proposal_by_slot):
+        """
+        Fills the bubbles during a view change. Basically, its a preprepare that assigns the proposed slot instead of using a new slot.
+        input:
+            proposal_by_slot: dictionary that keyed by slot and the values are the preprepared proposals
+        """
+        self._log.info("%d: fill bubbles.", self._index)
+        self._log.debug("Number of bubbles: %d", len(proposal_by_slot))
+
+        bubbles = {
+            'leader': self._index,
+            'view': self._view.get_view(),
+            'proposal': proposal_by_slot,
+            'type': preprepare
+        }
+        await self._post(self._nodes, PBFTHandler.PREPARE, bubbles)
+
+    async def garbage_collector(self):
+        """
+        Garbage collector for the view change votes. It deletes the status in self._status_by_slot if its slot is smaller than the next_slot of the checkpoint.
+        """
+        await asyncio.sleep(self._sync_interval)
+        delete_slots = []
+        for slot in self._status_by_slot:
+            if int(slot) < self._ckpt.next_slot:
+                delete_slots.append(slot)
+        for slot in delete_slots:
+            del self._status_by_slot[slot]
+
+        # Garbage collector for the checkpoints after view change
+        await self._ckpt.garbage_collection()
+
+
+def logging_config(log_level=logging.INFO, log_file=None):
+    root_logger = logging.getLogger()
+    if root_logger.hasHandlers():
+        return
+    root_logger.setLevel(log_level)
+    f = logging.Formatter("[%(levelname)s]%(module)s->%(funcName)s:\t %(message)s \t --- %(asctime)s")
+
+    h = logging.StreamHandler()
+    h.setFormatter(f)
+    h.setLevel(log_level)
+    root_logger.addHandler(h)
+
+def arg_parse():
+    # parsing command line actions
+    parser = argparse.ArgumentParser(description='PBFT Node Simulator')
+    parser.add_argument('-i', '--index', type=int, help='Index of the node')
+    parser.add_argument('-c', '--config', default='pbft.yaml', type=argparse.FileType('r'), help='use configuration [%(default)s]')
+    parser.add_argument('-lf', '--log_to_file', default=False, type=bool, help='Whether to dump log messages to file, default = False')
+    args = parser.parse_args()
+    return args
+
+def conf_parse(conf_file) -> dict:
+    """
+    Parses the configuration file and returns a dictionary of the configurations.
+    input:
+        conf_file: configuration file
+             nodes:
+                - host: localhost
+                port: 30000
+                - host: localhost
+                port: 30001
+                - host: localhost
+                port: 30002
+                - host: localhost
+                port: 30003
+            clients:
+                - host: localhost
+                port: 20001
+                - host: localhost
+                port: 20002
+            loss%: 0
+            ckpt_interval: 10
+            retry_times_before_view_change: 2
+            sync_interval: 5
+            misc:
+                network_timeout: 5 
+    """
+    conf = yaml.load(conf_file)
+    return conf
+
+def main():
+    args = arg_parse()
+    if args.log_to_file:
+        logging.basicConfig(filename='log_' + str(args.index), filemode='a', level=logging.DEBUG)
+    logging_config()
+    log = logging.getLogger()
+    conf = conf_parse(args.config)
+    log.debug("%d: Configuration: %s", args.index, conf)
+
+    addr = conf['nodes'][args.index]
+    host = addr['host']
+    port = addr['port']
+
+    pbft = PBFTHandler(args.index, conf)
+
+    asyncio.ensure_future(pbft.synchronize())
+    asyncio.ensure_future(pbft.garbage_collector())
+
+    app = web.Application()
+    app.add_routes([
+        web.post('/' + PBFTHandler.REQUEST, pbft.get_request),
+        web.post('/' + PBFTHandler.PREPREPARE, pbft.preprepare),
+        web.post('/' + PBFTHandler.PREPARE, pbft.prepare),
+        web.post('/' + PBFTHandler.COMMIT, pbft.commit),
+        web.post('/' + PBFTHandler.REPLY, pbft.reply),
+        web.post('/' + PBFTHandler.RECEIVE_CKPT_VOTE, pbft.receive_ckpt_vote),
+        web.post('/' + PBFTHandler.RECEIVE_SYNC, pbft.receive_sync),
+        web.post('/' + PBFTHandler.VIEW_CHANGE_REQUEST, pbft.get_view_change_request),
+        web.post('/' + PBFTHandler.VIEW_CHANGE_VOTE, pbft.receive_view_change_vote),
+    ])
+    web.run_app(app, host=host, port=port, access_log=None)
+
+if __name__ == "__main__":
+    main()

@@ -2,11 +2,6 @@
 
 The pBFT consensus rounds are called views and are broken into 4 phases:
 
-1. A client sends a request to the leader node to invoke a service operation.
-2. The leading node broadcasts the request to the backup nodes.
-3. The nodes execute the request, then send a reply to the client
-4. The client awaits  $(f +1)$ replies from different nodes with the same result, where f, equals the maximum number of potentially faulty nodes.
-
 As the pBFT consensus requires a leader which stands in place between the client and the backup nodes. During every view (consensus round) the leading node is changed and can be replaced with a protocol called a view change if a certain amount of time has passed without the leading node broadcasting the request.
 
 Implementing a simple pBFT algorithm is easy. The algorithm consists of the following steps:
