@@ -1,4 +1,4 @@
-# An Replication of the Proof of Work Algorithm
+# A Replication of the Proof of Work Algorithm
 
 In the course of my research on how to apply the proof of work algorithm to a blockchain, I have created a simple replication of the proof of work algorithm.
 
@@ -14,6 +14,9 @@ And it contains the following information:
 - Hash Value: The hash of the block which is basically it's id
 - Timestamo: The time the block was created
 - Nonce(Proof-of-work): The number of times the block has been mined
+<<<<<<< HEAD
 
 ## What is a blockchain?
 A blockchain is a collection of blocks. It is a chain of blocks that are linked together.
+=======
+>>>>>>> 9541861debe30c8cb355f4aae5483af958c92804
